@@ -7,6 +7,10 @@ AutoSpMV is an automated optimization system for Sparse Matrix-Vector Multiplica
 - Loop optimizations
 - Cache utilization
 
+## Inspiration
+
+This project was inspired by NVIDIA's work on using LLMs for CUDA kernel optimization, as presented in their paper ["Optimizing CUDA Kernels via LLM-Guided Evolution"](https://arxiv.org/abs/2402.00882). While NVIDIA focused on CUDA-specific optimizations using genetic algorithms guided by LLMs, AutoSpMV adapts this concept for CPU-based SpMV kernels, using iterative refinement with OpenMP and SIMD optimizations.
+
 ## Features
 
 - Automated code generation and optimization
