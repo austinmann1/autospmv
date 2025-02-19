@@ -5,6 +5,7 @@ from typing import Dict, Tuple, Any, List
 import json
 import os
 import time
+from kernelbench import Model, get_inputs, get_init_inputs
 
 class KernelBenchWrapper:
     """Wrapper for KernelBench dataset and evaluation utilities."""
@@ -22,10 +23,13 @@ class KernelBenchWrapper:
         self.has_cuda = torch.cuda.is_available()
         
         if not use_mock:
-            from datasets import load_dataset
-            print("Loading KernelBench dataset...")
-            self.dataset = load_dataset("kernelbench/kernelbench", split="train")
-            print(f"Loaded {len(self.dataset)} tasks")
+            # Load KernelBench models
+            self.models = {}
+            for level in range(1, 4):  # Levels 1-3
+                try:
+                    self.models[f'level{level}'] = Model(level)
+                except Exception as e:
+                    print(f"Warning: Could not load level {level}: {e}")
         else:
             self._setup_mock_dataset()
             
@@ -33,20 +37,10 @@ class KernelBenchWrapper:
         """Create mock dataset for local development."""
         self.mock_tasks = [
             {
-                'id': 'mock_matmul_1',
+                'id': 'spmv_level1',
                 'level': 1,
-                'name': 'Matrix Multiplication',
-                'description': 'Optimize matrix multiplication for large dense matrices',
-                'get_inputs': 'lambda: (torch.randn(1000, 1000), torch.randn(1000, 1000))',
-                'reference_impl': 'def ref_impl(a, b):\n    return torch.matmul(a, b)'
-            },
-            {
-                'id': 'mock_spmv_1',
-                'level': 1,
-                'name': 'Sparse Matrix-Vector Multiplication',
-                'description': 'Optimize sparse matrix-vector multiplication in CSR format',
-                'get_inputs': 'lambda: (torch.randn(1000, 1000).to_sparse(), torch.randn(1000))',
-                'reference_impl': 'def ref_impl(a, x):\n    return torch.sparse.mm(a, x.unsqueeze(1)).squeeze(1)'
+                'name': 'SpMV',
+                'description': 'Sparse Matrix-Vector Multiplication'
             }
         ]
         
@@ -55,46 +49,39 @@ class KernelBenchWrapper:
         if self.use_mock:
             return [task for task in self.mock_tasks if task['level'] == 1]
         else:
-            return [task for task in self.dataset if task['level'] == 1]
+            return [task for task in self.models['level1'].tasks if task['level'] == 1]
     
-    def get_task_data(self, task_id: str) -> Dict[str, np.ndarray]:
+    def get_task_data(self, task_id: str) -> Dict[str, torch.Tensor]:
         """Get input data for a specific task.
         
         Args:
             task_id: Task identifier (e.g., 'spmv_level1')
             
         Returns:
-            Dictionary of input arrays
+            Dictionary of input tensors
         """
         if self.use_mock:
             return self._get_mock_data(task_id)
             
-        # Find the task
-        task = next((t for t in self.dataset if t['id'] == task_id), None)
-        if not task:
-            raise ValueError(f"Task {task_id} not found in KernelBench")
-            
-        # Load and preprocess data
-        if 'spmv' in task_id.lower():
-            # SpMV specific data
-            matrix = task['matrix']
-            return {
-                'values': np.array(matrix['data'], dtype=np.float32),
-                'col_indices': np.array(matrix['indices'], dtype=np.int32),
-                'row_ptr': np.array(matrix['indptr'], dtype=np.int32),
-                'x': np.random.randn(matrix['shape'][1]).astype(np.float32)
-            }
-        else:
-            # Generic dense data
-            return {k: np.array(v, dtype=np.float32) 
-                   for k, v in task['data'].items()}
+        # Parse task ID
+        level = int(task_id.split('_level')[-1])
+        model = self.models[f'level{level}']
+        
+        # Get inputs
+        inputs = get_inputs(model)
+        init_inputs = get_init_inputs(model)
+        
+        return {
+            **inputs,
+            **init_inputs
+        }
                    
     def get_task_inputs(self, task_id: str) -> Tuple[torch.Tensor, ...]:
         """Generate inputs for a specific task."""
         if self.use_mock:
             task = next(t for t in self.mock_tasks if t['id'] == task_id)
         else:
-            task = self.dataset[task_id]
+            task = next(t for t in self.models[f'level{int(task_id.split("_level")[-1])}'].tasks if t['id'] == task_id)
             
         input_gen = eval(task['get_inputs'])  # Safe eval as this is from trusted source
         return input_gen()
@@ -104,7 +91,7 @@ class KernelBenchWrapper:
         if self.use_mock:
             task = next(t for t in self.mock_tasks if t['id'] == task_id)
         else:
-            task = self.dataset[task_id]
+            task = next(t for t in self.models[f'level{int(task_id.split("_level")[-1])}'].tasks if t['id'] == task_id)
             
         # Create a namespace for the function
         namespace = {'torch': torch}
@@ -176,14 +163,14 @@ class KernelBenchWrapper:
             # TODO: Implement real CUDA kernel execution and profiling
             raise NotImplementedError("Real CUDA execution not implemented yet")
     
-    def verify_output(self, task_id: str, output: np.ndarray, 
-                     inputs: Dict[str, np.ndarray]) -> bool:
+    def verify_output(self, task_id: str, output: torch.Tensor, 
+                     inputs: Dict[str, torch.Tensor]) -> bool:
         """Verify the correctness of kernel output.
         
         Args:
             task_id: Task identifier
-            output: Kernel output array
-            inputs: Input arrays used
+            output: Kernel output tensor
+            inputs: Input tensors used
             
         Returns:
             True if output matches expected result
@@ -191,44 +178,33 @@ class KernelBenchWrapper:
         if self.use_mock:
             return True  # Mock always passes
             
-        task = next((t for t in self.dataset if t['id'] == task_id), None)
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
-            
-        # Get reference implementation
-        if 'spmv' in task_id.lower():
-            expected = self._compute_spmv_reference(inputs)
-        else:
-            expected = task['reference_output']
+        # Get reference output
+        level = int(task_id.split('_level')[-1])
+        model = self.models[f'level{level}']
+        
+        with torch.no_grad():
+            expected = model(**inputs)
             
         # Compare with tolerance
-        return np.allclose(output, expected, rtol=1e-5, atol=1e-5)
+        return torch.allclose(output, expected, rtol=1e-5, atol=1e-5)
         
-    def _compute_spmv_reference(self, inputs: Dict[str, np.ndarray]) -> np.ndarray:
-        """Compute reference SpMV result."""
-        import scipy.sparse as sp
-        
-        matrix = sp.csr_matrix(
-            (inputs['values'], inputs['col_indices'], inputs['row_ptr'])
-        )
-        return matrix @ inputs['x']
-    
-    def _get_mock_data(self, task_id: str) -> Dict[str, np.ndarray]:
-        """Get mock data for a specific task."""
-        task = next(t for t in self.mock_tasks if t['id'] == task_id)
+    def _get_mock_data(self, task_id: str) -> Dict[str, torch.Tensor]:
+        """Get mock data for testing."""
         if 'spmv' in task_id.lower():
-            # SpMV specific data
+            # Mock SpMV data
+            nnz = 1000
+            n = 1000
             return {
-                'values': np.random.randn(1000).astype(np.float32),
-                'col_indices': np.random.randint(0, 1000, size=1000).astype(np.int32),
-                'row_ptr': np.random.randint(0, 1000, size=1001).astype(np.int32),
-                'x': np.random.randn(1000).astype(np.float32)
+                'values': torch.randn(nnz, dtype=torch.float32),
+                'col_indices': torch.randint(0, n, (nnz,), dtype=torch.int32),
+                'row_ptr': torch.randint(0, nnz, (n+1,), dtype=torch.int32),
+                'x': torch.randn(n, dtype=torch.float32)
             }
         else:
-            # Generic dense data
+            # Generic mock data
             return {
-                'a': np.random.randn(1000, 1000).astype(np.float32),
-                'b': np.random.randn(1000, 1000).astype(np.float32)
+                'a': torch.randn(1000, 1000, dtype=torch.float32),
+                'b': torch.randn(1000, 1000, dtype=torch.float32)
             }
     
     def generate_perf_report(self, task_id: str, baseline_metrics: Dict[str, Any],
@@ -243,7 +219,7 @@ class KernelBenchWrapper:
             'speedup': speedup,
             'numerically_correct': self.verify_output(
                 task_id,
-                candidate_metrics['output'].cpu().numpy(),
+                candidate_metrics['output'].cpu(),
                 self.get_task_data(task_id)
             )
         }
