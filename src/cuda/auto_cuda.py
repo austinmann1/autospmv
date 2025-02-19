@@ -12,19 +12,25 @@ from ..llm.gpu_optimizer import GPUOptimizer
 class AutoCUDA:
     """Main orchestrator for GPU kernel optimization."""
     
-    def __init__(self, output_dir: Path, task_id: str = "mock_spmv_1"):
+    def __init__(self, output_dir: Path, task_id: str = "spmv_level1", use_mock: bool = False):
         """Initialize the GPU kernel optimization system.
         
         Args:
             output_dir: Directory for outputs (compiled kernels, logs)
             task_id: KernelBench task ID to optimize for
+            use_mock: If True, use mock environment (for non-GPU systems)
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Check CUDA availability
+        self.has_cuda = torch.cuda.is_available()
+        if not self.has_cuda and not use_mock:
+            raise RuntimeError("CUDA not available and mock environment not enabled")
+        
         # Initialize components
         self.compiler = CUDACompiler(self.output_dir)
-        self.kernelbench = KernelBenchWrapper(use_mock=True)
+        self.kernelbench = KernelBenchWrapper(use_mock=use_mock)
         self.task_id = task_id
         
         # Initialize LLM optimizer
@@ -39,6 +45,61 @@ class AutoCUDA:
         # Setup logging
         self.log_file = self.output_dir / "optimization_log.json"
         self.optimization_history: List[Dict[str, Any]] = []
+        
+        # Initialize CUDA events for timing
+        if self.has_cuda:
+            self.start_event = torch.cuda.Event(enable_timing=True)
+            self.end_event = torch.cuda.Event(enable_timing=True)
+            
+    def get_cuda_metrics(self) -> Dict[str, float]:
+        """Get CUDA metrics using nvprof/Nsight (when available)."""
+        if not self.has_cuda:
+            return {}
+            
+        metrics = {
+            "achieved_occupancy": torch.cuda.occupancy_max_active_blocks_per_multiprocessor(self.current_kernel, 256),
+            "sm_efficiency": torch.cuda.Stream.current_stream().query_memory_allocated() / torch.cuda.get_device_properties(0).total_memory * 100,
+            "dram_read_throughput": 0,  # TODO: Add proper nvprof integration
+            "dram_write_throughput": 0
+        }
+        return metrics
+        
+    def run_cuda_kernel(self, kernel_file: Path, collect_metrics: bool = True) -> Dict[str, Any]:
+        """Run a CUDA kernel and collect performance metrics."""
+        if not self.has_cuda:
+            return self._run_mock_kernel()
+            
+        # Compile the kernel
+        module = self.compiler.compile_kernel(kernel_file)
+        if not module:
+            raise RuntimeError(f"Failed to compile kernel: {kernel_file}")
+            
+        # Prepare input data
+        input_data = self.kernelbench.get_task_data(self.task_id)
+        
+        # Transfer to GPU
+        gpu_input = {k: torch.from_numpy(v).cuda() for k, v in input_data.items()}
+        
+        # Run kernel with timing
+        self.start_event.record()
+        output = module.run(**gpu_input)
+        self.end_event.record()
+        torch.cuda.synchronize()
+        
+        runtime_ms = self.start_event.elapsed_time(self.end_event)
+        
+        metrics = {
+            "runtime_ms": runtime_ms,
+            **(self.get_cuda_metrics() if collect_metrics else {})
+        }
+        
+        # Transfer output back to CPU for verification
+        cpu_output = output.cpu().numpy() if isinstance(output, torch.Tensor) else output
+        
+        return {
+            "output": cpu_output,
+            "metrics": metrics
+        }
         
     def _load_baseline(self) -> Tuple[Path, Dict[str, Any]]:
         """Load and compile baseline kernel."""
@@ -72,11 +133,7 @@ class AutoCUDA:
             
         # Run performance evaluation
         try:
-            metrics = self.kernelbench.run_cuda_kernel(
-                self.task_id,
-                candidate_binary,
-                collect_metrics=True
-            )
+            metrics = self.run_cuda_kernel(candidate_binary, collect_metrics=True)
             
             # Extract key changes from the candidate code
             candidate_code = candidate_file.read_text()

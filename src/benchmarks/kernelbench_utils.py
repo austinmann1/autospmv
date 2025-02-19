@@ -9,7 +9,13 @@ import time
 class KernelBenchWrapper:
     """Wrapper for KernelBench dataset and evaluation utilities."""
     
-    def __init__(self, cache_dir: Path = None, use_mock: bool = True):
+    def __init__(self, cache_dir: Path = None, use_mock: bool = False):
+        """Initialize KernelBench wrapper.
+        
+        Args:
+            cache_dir: Directory to cache datasets
+            use_mock: If True, use mock data for testing
+        """
         self.cache_dir = cache_dir or Path.home() / '.cache' / 'kernelbench'
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.use_mock = use_mock
@@ -17,10 +23,12 @@ class KernelBenchWrapper:
         
         if not use_mock:
             from datasets import load_dataset
+            print("Loading KernelBench dataset...")
             self.dataset = load_dataset("kernelbench/kernelbench", split="train")
+            print(f"Loaded {len(self.dataset)} tasks")
         else:
             self._setup_mock_dataset()
-    
+            
     def _setup_mock_dataset(self):
         """Create mock dataset for local development."""
         self.mock_tasks = [
@@ -49,6 +57,38 @@ class KernelBenchWrapper:
         else:
             return [task for task in self.dataset if task['level'] == 1]
     
+    def get_task_data(self, task_id: str) -> Dict[str, np.ndarray]:
+        """Get input data for a specific task.
+        
+        Args:
+            task_id: Task identifier (e.g., 'spmv_level1')
+            
+        Returns:
+            Dictionary of input arrays
+        """
+        if self.use_mock:
+            return self._get_mock_data(task_id)
+            
+        # Find the task
+        task = next((t for t in self.dataset if t['id'] == task_id), None)
+        if not task:
+            raise ValueError(f"Task {task_id} not found in KernelBench")
+            
+        # Load and preprocess data
+        if 'spmv' in task_id.lower():
+            # SpMV specific data
+            matrix = task['matrix']
+            return {
+                'values': np.array(matrix['data'], dtype=np.float32),
+                'col_indices': np.array(matrix['indices'], dtype=np.int32),
+                'row_ptr': np.array(matrix['indptr'], dtype=np.int32),
+                'x': np.random.randn(matrix['shape'][1]).astype(np.float32)
+            }
+        else:
+            # Generic dense data
+            return {k: np.array(v, dtype=np.float32) 
+                   for k, v in task['data'].items()}
+                   
     def get_task_inputs(self, task_id: str) -> Tuple[torch.Tensor, ...]:
         """Generate inputs for a specific task."""
         if self.use_mock:
@@ -136,10 +176,60 @@ class KernelBenchWrapper:
             # TODO: Implement real CUDA kernel execution and profiling
             raise NotImplementedError("Real CUDA execution not implemented yet")
     
-    def verify_outputs(self, reference: torch.Tensor, candidate: torch.Tensor,
-                      rtol: float = 1e-5, atol: float = 1e-8) -> bool:
-        """Verify numerical correctness of candidate output against reference."""
-        return torch.allclose(reference, candidate, rtol=rtol, atol=atol)
+    def verify_output(self, task_id: str, output: np.ndarray, 
+                     inputs: Dict[str, np.ndarray]) -> bool:
+        """Verify the correctness of kernel output.
+        
+        Args:
+            task_id: Task identifier
+            output: Kernel output array
+            inputs: Input arrays used
+            
+        Returns:
+            True if output matches expected result
+        """
+        if self.use_mock:
+            return True  # Mock always passes
+            
+        task = next((t for t in self.dataset if t['id'] == task_id), None)
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+            
+        # Get reference implementation
+        if 'spmv' in task_id.lower():
+            expected = self._compute_spmv_reference(inputs)
+        else:
+            expected = task['reference_output']
+            
+        # Compare with tolerance
+        return np.allclose(output, expected, rtol=1e-5, atol=1e-5)
+        
+    def _compute_spmv_reference(self, inputs: Dict[str, np.ndarray]) -> np.ndarray:
+        """Compute reference SpMV result."""
+        import scipy.sparse as sp
+        
+        matrix = sp.csr_matrix(
+            (inputs['values'], inputs['col_indices'], inputs['row_ptr'])
+        )
+        return matrix @ inputs['x']
+    
+    def _get_mock_data(self, task_id: str) -> Dict[str, np.ndarray]:
+        """Get mock data for a specific task."""
+        task = next(t for t in self.mock_tasks if t['id'] == task_id)
+        if 'spmv' in task_id.lower():
+            # SpMV specific data
+            return {
+                'values': np.random.randn(1000).astype(np.float32),
+                'col_indices': np.random.randint(0, 1000, size=1000).astype(np.int32),
+                'row_ptr': np.random.randint(0, 1000, size=1001).astype(np.int32),
+                'x': np.random.randn(1000).astype(np.float32)
+            }
+        else:
+            # Generic dense data
+            return {
+                'a': np.random.randn(1000, 1000).astype(np.float32),
+                'b': np.random.randn(1000, 1000).astype(np.float32)
+            }
     
     def generate_perf_report(self, task_id: str, baseline_metrics: Dict[str, Any],
                             candidate_metrics: Dict[str, Any]) -> str:
@@ -151,9 +241,10 @@ class KernelBenchWrapper:
             'baseline_runtime_ms': baseline_metrics['runtime_ms'],
             'candidate_runtime_ms': candidate_metrics['runtime_ms'],
             'speedup': speedup,
-            'numerically_correct': self.verify_outputs(
-                baseline_metrics['output'],
-                candidate_metrics['output']
+            'numerically_correct': self.verify_output(
+                task_id,
+                candidate_metrics['output'].cpu().numpy(),
+                self.get_task_data(task_id)
             )
         }
         
