@@ -48,10 +48,18 @@ If time permits, try to implement some styling for other elements in markdown, l
 * Happy Coding :)`;
 
 /**
- * Markdown Streamer class for handling GitHub-style markdown formatting
- * with random-sized chunks of text
+ * Interface for the markdown rendering options
  */
-export class MarkdownStreamer {
+export interface MarkdownRendererOptions {
+  // Add any configuration options here
+  preserveNumbering?: boolean;
+}
+
+/**
+ * Core markdown renderer class - handles the actual markdown parsing logic
+ * This class is independent of streaming/chunking and focuses solely on rendering
+ */
+export class MarkdownRenderer {
   private container: HTMLElement;
   private buffer: string;
   private inCode: boolean;
@@ -60,13 +68,16 @@ export class MarkdownStreamer {
   private inListItem: boolean;
   private inHeading: boolean;
   private headingLevel: number;
+  private options: MarkdownRendererOptions;
 
   /**
-   * Create a new MarkdownStreamer instance
+   * Create a new markdown renderer
    * @param container The HTML element to render markdown into
+   * @param options Configuration options for the renderer
    */
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, options: MarkdownRendererOptions = {}) {
     this.container = container;
+    this.options = options;
     this.buffer = '';
     this.inCode = false;
     this.codeBlockCount = 0;
@@ -78,7 +89,7 @@ export class MarkdownStreamer {
   }
 
   /**
-   * Reset the streamer state and clear the container
+   * Reset the renderer state and clear the container
    */
   public reset(): void {
     this.container.innerHTML = '';
@@ -123,11 +134,11 @@ export class MarkdownStreamer {
   }
 
   /**
-   * Process a complete line of markdown text
+   * Process a line of text to detect triple backticks not at the start of a line
    * @param line The line to process
    */
   private processLine(line: string): void {
-    // Check for code blocks with triple backticks
+    // Check for code blocks with triple backticks at the start of a line
     if (line.trim().startsWith('```')) {
       this.handleCodeBlock(line);
       return;
@@ -274,12 +285,13 @@ export class MarkdownStreamer {
    * @returns The list element
    */
   private getOrCreateList(listType: 'ul' | 'ol'): HTMLElement {
-    const lastList = this.container.querySelector(`${listType}:last-child`);
-    if (lastList) {
-      return lastList as HTMLElement;
+    // Check if the last element is already a list of the desired type
+    const lastChild = this.container.lastElementChild;
+    if (lastChild && lastChild.tagName.toLowerCase() === listType) {
+      return lastChild as HTMLElement;
     }
     
-    // Create a new list if one doesn't exist
+    // Otherwise, create a new list
     const list = document.createElement(listType);
     this.container.appendChild(list);
     return list;
@@ -299,9 +311,7 @@ export class MarkdownStreamer {
     
     const p = this.container.querySelector('p:last-child');
     if (p) {
-      const content = p.innerHTML 
-        ? p.innerHTML + ' ' + this.formatInlineMarkdown(text) 
-        : this.formatInlineMarkdown(text);
+      const content = p.innerHTML ? p.innerHTML + ' ' + this.formatInlineMarkdown(text) : this.formatInlineMarkdown(text);
       p.innerHTML = content;
     }
   }
@@ -386,6 +396,45 @@ export class MarkdownStreamer {
     
     // Close any open blocks
     this.closeCurrentBlock();
+  }
+}
+
+/**
+ * A class that uses MarkdownRenderer with streaming capabilities
+ * This is a wrapper that combines the renderer with streaming logic
+ */
+export class MarkdownStreamer {
+  private renderer: MarkdownRenderer;
+  
+  /**
+   * Create a new markdown streamer
+   * @param container The HTML element to render markdown into
+   * @param options Configuration options for the renderer
+   */
+  constructor(container: HTMLElement, options: MarkdownRendererOptions = {}) {
+    this.renderer = new MarkdownRenderer(container, options);
+  }
+  
+  /**
+   * Reset the streamer state and clear the container
+   */
+  public reset(): void {
+    this.renderer.reset();
+  }
+  
+  /**
+   * Process a chunk of markdown text
+   * @param chunk The chunk of text to process
+   */
+  public processChunk(chunk: string): void {
+    this.renderer.processChunk(chunk);
+  }
+  
+  /**
+   * Finalize the markdown processing
+   */
+  public finalize(): void {
+    this.renderer.finalize();
   }
 }
 
