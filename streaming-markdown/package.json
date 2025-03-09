@@ -1,0 +1,17 @@
+{
+  "name": "markdown-streamer",
+  "version": "1.0.0",
+  "description": "Markdown streaming implementation for coding interview",
+  "main": "src/streamer.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5"
+  },
+  "dependencies": {
+    "marked": "^15.0.7",
+    "streaming-markdown": "^0.1.0"
+  }
+}

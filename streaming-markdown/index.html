@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Markdown Streamer Demo</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #24292e;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    #output {
+      border: 1px solid #e1e4e8;
+      border-radius: 6px;
+      padding: 16px;
+      background-color: #fff;
+      margin-top: 20px;
+      min-height: 300px;
+    }
+    
+    button {
+      background-color: #2ea44f;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    
+    button:hover {
+      background-color: #2c974b;
+    }
+
+    .progress {
+      margin-top: 10px;
+      height: 5px;
+      background-color: #eee;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background-color: #2ea44f;
+      width: 0%;
+      transition: width 0.5s ease;
+    }
+
+    /* GitHub Markdown Styles */
+    .markdown-body h1 {
+      margin-top: 24px;
+      margin-bottom: 16px;
+      font-weight: 600;
+      line-height: 1.25;
+      padding-bottom: 0.3em;
+      border-bottom: 1px solid #eaecef;
+      font-size: 2em;
+    }
+
+    .markdown-body h2 {
+      margin-top: 24px;
+      margin-bottom: 16px;
+      font-weight: 600;
+      line-height: 1.25;
+      padding-bottom: 0.3em;
+      border-bottom: 1px solid #eaecef;
+      font-size: 1.5em;
+    }
+
+    .markdown-body h3 {
+      margin-top: 24px;
+      margin-bottom: 16px;
+      font-weight: 600;
+      line-height: 1.25;
+      font-size: 1.25em;
+    }
+
+    .markdown-body p {
+      margin-top: 0;
+      margin-bottom: 16px;
+    }
+
+    .markdown-body ul, .markdown-body ol {
+      padding-left: 2em;
+      margin-bottom: 16px;
+    }
+
+    .markdown-body li {
+      margin: 0.25em 0;
+    }
+
+    .markdown-body code {
+      background-color: #f6f8fa;
+      padding: 0.2em 0.4em;
+      border-radius: 3px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 85%;
+    }
+
+    .markdown-body pre {
+      background-color: #f6f8fa;
+      border-radius: 6px;
+      overflow: auto;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .markdown-body pre code {
+      background-color: transparent;
+      padding: 0;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 85%;
+      line-height: 1.45;
+    }
+
+    .markdown-body blockquote {
+      padding: 0 1em;
+      color: #6a737d;
+      border-left: 0.25em solid #dfe2e5;
+      margin: 0 0 16px 0;
+    }
+
+    .markdown-body em {
+      font-style: italic;
+    }
+
+    .markdown-body strong {
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <h1>Markdown Streaming Demo</h1>
+  <p>This demonstrates a streaming markdown parser that handles GitHub-style formatting with proper handling of random-sized chunks.</p>
+  
+  <button id="stream-btn">Stream Markdown</button>
+  <div class="progress">
+    <div id="progress-bar" class="progress-bar"></div>
+  </div>
+  <div id="output" class="markdown-body"></div>
+
+  <script type="module">
+    import { MarkdownStreamer, streamMarkdown, sampleMarkdown } from '/dist/markdown-streamer-simple.js';
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      const containerId = 'output';
+      const buttonId = 'stream-btn';
+      const progressBarId = 'progress-bar';
+      
+      const container = document.getElementById(containerId);
+      const button = document.getElementById(buttonId);
+      const progressBar = document.getElementById(progressBarId);
+      
+      if (!container || !button || !progressBar) {
+        console.error('Required elements not found');
+        return;
+      }
+      
+      // Create a new streamer
+      const streamer = new MarkdownStreamer(container);
+      console.log('Streamer initialized successfully');
+      
+      // Add click event to the button
+      button.addEventListener('click', () => {
+        // Reset the streamer and progress bar
+        streamer.reset();
+        progressBar.style.width = '0%';
+        
+        console.log('Starting streaming process');
+        
+        const text = sampleMarkdown;
+        const totalLength = text.length;
+        let processedLength = 0;
+        
+        // Stream the markdown text
+        streamMarkdown(
+          text,
+          (chunk, isLast) => {
+            console.log(`Processing chunk of length ${chunk.length}, isLast: ${isLast}`);
+            
+            // Process the chunk
+            streamer.processChunk(chunk);
+            
+            // Update progress bar
+            processedLength += chunk.length;
+            const progress = (processedLength / totalLength) * 100;
+            progressBar.style.width = `${progress}%`;
+            
+            if (isLast) {
+              streamer.finalize();
+              console.log('Streaming complete, finalizing');
+            }
+          },
+          () => {
+            console.log('Streaming process completed');
+          }
+        );
+      });
+    });
+  </script>
+</body>
+</html>
