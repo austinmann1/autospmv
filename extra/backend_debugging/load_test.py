@@ -1,0 +1,1 @@
+# this file hast the tests that spin up the server on port 8000 and test the endpoints. there are three tests here.
