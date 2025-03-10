@@ -21,6 +21,12 @@ npm install
 
 ## Usage
 
+The library is designed with modularity in mind, separating core rendering logic from streaming functionality. This allows you to use the parser with your own streaming implementation.
+
+### Using with Built-in Streaming
+
+If you want to use our complete solution:
+
 ```typescript
 import { MarkdownStreamer, streamMarkdown } from './dist/markdown-streamer-simple.js';
 
@@ -43,6 +49,44 @@ streamMarkdown(
 );
 ```
 
+### Using with Your Own Streaming Implementation
+
+If you have your own streaming logic, you can use just the core renderer:
+
+```typescript
+import { MarkdownRenderer } from './dist/markdown-streamer-simple.js';
+
+// Create a new renderer instance
+const container = document.getElementById('output');
+const renderer = new MarkdownRenderer(container);
+
+// Your custom streaming code
+yourStreamImplementation({
+  onChunkReceived: (chunk) => {
+    // Process each chunk through the renderer
+    renderer.processChunk(chunk);
+  },
+  onComplete: () => {
+    // Make sure to finalize when streaming is complete
+    renderer.finalize();
+  }
+});
+```
+
+### Configuration Options
+
+The renderer accepts configuration options:
+
+```typescript
+// Available options
+const options = {
+  preserveNumbering: true // Preserves original numbers in ordered lists
+};
+
+// Pass options to the renderer
+const renderer = new MarkdownRenderer(container, options);
+```
+
 ## Development
 
 ```bash
@@ -61,6 +105,15 @@ The parser uses a sophisticated state machine to handle streaming markdown conte
 2. **Line Processing**: Analyzes each complete line for markdown patterns
 3. **State Tracking**: Maintains formatting state across chunks
 4. **DOM Updates**: Efficiently updates the document as content arrives
+
+### Architecture
+
+The implementation is split into two main classes:
+
+- **MarkdownRenderer**: Core rendering logic, processes markdown and updates the DOM
+- **MarkdownStreamer**: Thin wrapper around the renderer that simplifies integration with streaming
+
+This separation allows you to use the core rendering logic with any streaming implementation.
 
 ## License
 
